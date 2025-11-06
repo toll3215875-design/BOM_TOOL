@@ -4,14 +4,14 @@ import openpyxl
 import json
 import io
 import traceback
-import xlrd # (★ 1. xlrd をインポート)
+import xlrd 
 
 # --- 自作モジュールをインポート ---
 from file_parsers import (
     parse_single_excel_sheet_rich_text,
     parse_csv_or_txt,
     parse_pdf,
-    parse_single_excel_sheet_xls # (★ 2. 新しいパーサーをインポート)
+    parse_single_excel_sheet_xls
 )
 from bom_processor import (
     extract_flat_list_from_rows,
@@ -54,7 +54,6 @@ def process_file_endpoint():
     individual_results = {}
     
     try:
-        # (★ 3. if文を .xlsx と .xls で分岐させる ★)
         if filename.endswith(('.xlsx', '.xls')):
             selected_sheets_json = request.form.get('sheets', '[]')
             selected_sheets = json.loads(selected_sheets_json)
@@ -77,14 +76,17 @@ def process_file_endpoint():
                     
                     sheet = workbook[sheet_name]
                     
-                    # 既存の .xlsx パーサーを呼ぶ
                     data_2d, cancellation_refs = parse_single_excel_sheet_rich_text(sheet)
                     
-                    # (以降の処理は .xls と共通)
                     flat_list, error, cancellation_warnings_list = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
                     
+                    # ▼▼▼ 変更 (ここがバグだった) ▼▼▼
                     if error:
-                        individual_results[sheet_name] = {"error": error}
+                        # ヘッダーエラーなどが発生したら、シート処理を中断し、
+                        # 即座に詳細なエラーメッセージを返す
+                        print(f"--- [DEBUG] ヘッダー検出エラー (.xlsx): {error} ---")
+                        return jsonify({"error": error}), 500
+                    # ▲▲▲ 変更ここまで ▲▲▲
                     else:
                         final_data, duplicate_warnings = group_and_finalize_bom(flat_list)
                         total_warnings = duplicate_warnings + cancellation_warnings_list
@@ -98,7 +100,6 @@ def process_file_endpoint():
                 file_contents = in_memory_file.read()
                 
                 try:
-                    # formatting_info=True で取り消し線情報を取得
                     book = xlrd.open_workbook(file_contents=file_contents, formatting_info=True, on_demand=True)
                 except Exception as e:
                     print(traceback.format_exc())
@@ -111,14 +112,15 @@ def process_file_endpoint():
                         individual_results[sheet_name] = {"error": "指定されたシートが見つかりません。"}
                         continue
                     
-                    # 新しい .xls パーサーを呼ぶ
                     data_2d, cancellation_refs = parse_single_excel_sheet_xls(sheet, book)
 
-                    # (以降の処理は .xlsx と共通)
                     flat_list, error, cancellation_warnings_list = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
                     
+                    # ▼▼▼ 変更 (ここも同様に修正) ▼▼▼
                     if error:
-                        individual_results[sheet_name] = {"error": error}
+                        print(f"--- [DEBUG] ヘッダー検出エラー (.xls): {error} ---")
+                        return jsonify({"error": error}), 500
+                    # ▲▲▲ 変更ここまで ▲▲▲
                     else:
                         final_data, duplicate_warnings = group_and_finalize_bom(flat_list)
                         total_warnings = duplicate_warnings + cancellation_warnings_list
@@ -142,7 +144,11 @@ def process_file_endpoint():
             if not data_2d: return jsonify({"error": "ファイルからデータを抽出できませんでした。"}), 500
             
             flat_list, error, cancellation_warnings_list = extract_flat_list_from_rows(data_2d, cancellation_refs, remove_parentheses)
-            if error: return jsonify({"error": error}), 500
+            
+            # (CSVなどは元からこのロジックだった)
+            if error: 
+                print(f"--- [DEBUG] ヘッダー検出エラー (CSV/PDF/TXT): {error} ---")
+                return jsonify({"error": error}), 500
             
             all_flat_data.extend(flat_list)
             all_cancellation_warnings.update(cancellation_warnings_list)
@@ -152,9 +158,11 @@ def process_file_endpoint():
         combined_data, combined_duplicate_warnings = group_and_finalize_bom(all_flat_data)
         combined_total_warnings = combined_duplicate_warnings + sorted(list(all_cancellation_warnings))
         
+        # ▼▼▼ 変更: エラーメッセージを分かりやすく ▼▼▼
         if not combined_data:
-             print("--- [DEBUG] エラー: 最終集計データが空です ---")
-             return jsonify({"error": "有効なデータが見つかりませんでした。列の名称を確認してください"}), 500
+             print("--- [DEBUG] エラー: 最終集計データが空です (combined_data is empty) ---")
+             return jsonify({"error": "有効なデータが見つかりませんでした。列の名称やデータ行を確認してください。"}), 500
+        # ▲▲▲ 変更ここまで ▲▲▲
 
         print("--- [DEBUG] 処理成功。JSONを返します ---")
         return jsonify({
