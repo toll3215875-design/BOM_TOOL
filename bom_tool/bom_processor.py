@@ -25,7 +25,6 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
                 for j, cell in enumerate(row):
                     if j in used_cols: continue
                     
-                    # セルがオブジェクトになったため .value を参照
                     cell_value_str = str(cell.get("value", "")).lower().strip().replace(" ", "")
                     
                     if keyword.replace(" ", "") in cell_value_str:
@@ -34,7 +33,7 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
                         used_cols.add(j); found = True; break
                 if found: break
         
-        score = len(temp_map) # 'ref', 'part', 'mfg' の3つを見つける
+        score = len(temp_map)
         
         if score > best_score:
             best_score = score
@@ -42,26 +41,22 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
             header_row_index = i
             best_header_names = temp_header_names 
             
-            if best_score == 3: # 3つ全部見つかったら最高
-                break # ループ終了
+            if best_score == 3:
+                break
     
-    # コア要件（ref と part）が揃っているかチェック
     if 'ref' not in header_map or 'part' not in header_map:
         
         if 'ref' in best_header_names and 'part' not in best_header_names:
-            # Ref は見つかったが Part がない
             found_ref_name = best_header_names.get('ref', 'N/A')
             error_msg = f"ヘッダー行の特定に失敗しました。『部品番号』列は \"{found_ref_name}\" として認識しましたが、『型番』列（例: \"Part Number\", \"メーカー品番\"）が見つかりませんでした。"
             return None, error_msg, []
             
         elif 'part' in best_header_names and 'ref' not in best_header_names:
-            # Part は見つかったが Ref がない
             found_part_name = best_header_names.get('part', 'N/A')
             error_msg = f"ヘッダー行の特定に失敗しました。『型番』列は \"{found_part_name}\" として認識しましたが、『部品番号』列（例: \"Ref\", \"Symbol\"）が見つかりませんでした。"
             return None, error_msg, []
             
         else:
-            # 両方ない (best_score が 0 または 1 のまま)
             error_msg = "ヘッダー行の特定に失敗しました。先頭20行内に、『部品番号』（例: \"Ref\"）と『型番』（例: \"Part Number\"）の両方に一致するキーワードが見つかりませんでした。"
             return None, error_msg, []
 
@@ -71,9 +66,11 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
 
     cancellation_warnings_set = set() 
     upper_cancellation_refs = {ref.upper() for ref in cancellation_refs}
-    part_strike_warnings_set = set() # 型番取り消し線警告用
+    part_strike_warnings_set = set()
+    part_ref_mismatch_warnings_set = set()
 
-    for row in data_2d[start_index:]:
+    for i, row in enumerate(data_2d[start_index:]):
+    
         if not isinstance(row, list) or all(c is None or c.get("value", "").strip() == "" for c in row): continue
         
         def get_cell_value(key):
@@ -84,11 +81,32 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
         part_cell_obj = get_cell_value('part')
         mfg_cell_obj = get_cell_value('mfg')
         
-        ref_val_raw = ref_cell_obj.get("value", "").strip()
-        part_val_raw = part_cell_obj.get("value", "").strip()
-        mfg_val_raw = mfg_cell_obj.get("value", "").strip()
+        original_ref_val = ref_cell_obj.get("value", "").strip()
+        original_part_val = part_cell_obj.get("value", "").strip()
+        mfg_val_raw = mfg_cell_obj.get("value", "").strip() # mfg_val_raw はここで定義
+
+        has_ref = bool(original_ref_val)
+        has_part = bool(original_part_val)
         
-        is_part_continuation = part_val_raw in ['上↑', '↑', '"']
+        is_ref_continuation = original_ref_val in ['上↑', '↑', '"']
+        is_part_continuation = original_part_val in ['上↑', '↑', '"']
+        
+        if (has_ref and not has_part and not is_part_continuation) or \
+           (not has_ref and has_part and not is_ref_continuation and not is_part_continuation):
+            
+            row_num = start_index + i + 1 
+
+            if has_ref and not has_part:
+                warning_msg = f"警告 (行 {row_num}): 部品番号 '{original_ref_val}' がありますが、型番がありません。"
+                part_ref_mismatch_warnings_set.add(warning_msg)
+            elif not has_ref and has_part:
+                warning_msg = f"警告 (行 {row_num}): 型番 '{original_part_val}' がありますが、部品番号がありません。"
+                part_ref_mismatch_warnings_set.add(warning_msg)
+        
+        ref_val_raw = original_ref_val
+        part_val_raw = original_part_val
+
+        is_part_continuation = part_val_raw in ['上↑', '↑', '"'] # 再定義
         is_mfg_continuation = mfg_val_raw in ['上↑', '↑', '"']
         
         if is_part_continuation: part_val_raw = last_valid.get('part', '')
@@ -217,25 +235,54 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
             warning_msg = f"警告: 部品番号 {refs_str} の 型番 '{part_val_raw}' に取り消し線があります。"
             part_strike_warnings_set.add(warning_msg)
 
+        # ▼▼▼ ロジック修正 (ここから) ▼▼▼
         part_val_list = [p.strip() for p in part_val_raw.split('\n') if p.strip()]
+        
+        # current_refs_from_last_row には、この行で有効な (除外されなかった) Refがすべて入っている
+        # part_val_list には、この行で有効な Part がすべて入っている
 
-        if not any(part_val_list) or not current_refs_from_last_row:
+        # 1. Ref も Part もない (または両方とも継続) 場合はスキップ
+        if (not current_refs_from_last_row and not is_ref_continuation) and \
+           (not part_val_list and not is_part_continuation):
             continue
 
-        for part_line in part_val_list:
-            part_val = part_line.split()[0] if part_line else ""
-            mfg_val = mfg_val_raw if mfg_val_raw else detect_manufacturer(part_val)
-            if part_val:
-                for r in current_refs_from_last_row:
-                    flat_list.append({"ref": r, "part": part_val, "mfg": mfg_val})
+        # 2. Ref があり、Part もある (通常の行)
+        if current_refs_from_last_row and part_val_list:
+            for part_line in part_val_list:
+                part_val = part_line.split()[0] if part_line else ""
+                mfg_val = mfg_val_raw if mfg_val_raw else detect_manufacturer(part_val)
+                if part_val:
+                    for r in current_refs_from_last_row:
+                        flat_list.append({"ref": r, "part": part_val, "mfg": mfg_val})
+        
+        # 3. Ref があり、Part がない (不揃い警告が出た行)
+        elif current_refs_from_last_row and (not part_val_list and not is_part_continuation):
+            mfg_val = mfg_val_raw # RefしかないがMfgはあるかもしれない
+            for r in current_refs_from_last_row:
+                flat_list.append({"ref": r, "part": "", "mfg": mfg_val}) # Part を "" として追加
+
+        # 4. Ref がなく、Part がある (不揃い警告が出た行)
+        elif (not current_refs_from_last_row and not is_ref_continuation) and part_val_list:
+            for part_line in part_val_list:
+                part_val = part_line.split()[0] if part_line else ""
+                mfg_val = mfg_val_raw if mfg_val_raw else detect_manufacturer(part_val)
+                if part_val:
+                    # Ref を "" として追加
+                    flat_list.append({"ref": "", "part": part_val, "mfg": mfg_val})
+        
+        # 5. Ref も Part も継続記号の場合は、何もしない (データは last_valid に保存されている)
+        # (elif is_ref_continuation and is_part_continuation: continue)
+        # ▲▲▲ ロジック修正 (ここまで) ▲▲▲
     
     # Ref除外警告
     cancellation_warnings = [f"除外: 取り消し線のため {ref} を集計から除外しました。" for ref in sorted(list(cancellation_warnings_set))]
     # 型番取り消し線警告
     part_strike_warnings = sorted(list(part_strike_warnings_set))
+    # データ不揃い警告
+    part_ref_mismatch_warnings = sorted(list(part_ref_mismatch_warnings_set))
     
-    # すべての警告を結合して返す
-    return flat_list, None, cancellation_warnings + part_strike_warnings
+    # すべての警告を結合して返す (不揃い警告を先頭に)
+    return flat_list, None, part_ref_mismatch_warnings + cancellation_warnings + part_strike_warnings
 
 # --- コアロジック 2: フラットリストを集計 ---
 def group_and_finalize_bom(flat_list):
