@@ -83,7 +83,7 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
         
         original_ref_val = ref_cell_obj.get("value", "").strip()
         original_part_val = part_cell_obj.get("value", "").strip()
-        mfg_val_raw = mfg_cell_obj.get("value", "").strip() # mfg_val_raw はここで定義
+        mfg_val_raw = mfg_cell_obj.get("value", "").strip()
 
         has_ref = bool(original_ref_val)
         has_part = bool(original_part_val)
@@ -106,7 +106,7 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
         ref_val_raw = original_ref_val
         part_val_raw = original_part_val
 
-        is_part_continuation = part_val_raw in ['上↑', '↑', '"'] # 再定義
+        is_part_continuation = part_val_raw in ['上↑', '↑', '"']
         is_mfg_continuation = mfg_val_raw in ['上↑', '↑', '"']
         
         if is_part_continuation: part_val_raw = last_valid.get('part', '')
@@ -124,7 +124,7 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
             ref_val_spaced_v2 = re.sub(r'([）)])\s*([A-Z]+[0-9]+)', r'\1 \2', ref_val_spaced_v2, flags=re.IGNORECASE)
             ref_val_spaced_v2 = re.sub(r'([A-Z]+[0-9]+)\s*([（(])', r'\1 \2', ref_val_spaced_v2, flags=re.IGNORECASE)
 
-            all_split_parts = [r for r in re.split(r'[,、\s\.\・/\，]+', ref_val_spaced_v2) if r]
+            all_split_parts = [r for r in re.split(r'[,、\s\.\・/]+', ref_val_spaced_v2) if r]
             
             expanded_refs = []
 
@@ -235,18 +235,12 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
             warning_msg = f"警告: 部品番号 {refs_str} の 型番 '{part_val_raw}' に取り消し線があります。"
             part_strike_warnings_set.add(warning_msg)
 
-        # ▼▼▼ ロジック修正 (ここから) ▼▼▼
         part_val_list = [p.strip() for p in part_val_raw.split('\n') if p.strip()]
         
-        # current_refs_from_last_row には、この行で有効な (除外されなかった) Refがすべて入っている
-        # part_val_list には、この行で有効な Part がすべて入っている
-
-        # 1. Ref も Part もない (または両方とも継続) 場合はスキップ
         if (not current_refs_from_last_row and not is_ref_continuation) and \
            (not part_val_list and not is_part_continuation):
             continue
 
-        # 2. Ref があり、Part もある (通常の行)
         if current_refs_from_last_row and part_val_list:
             for part_line in part_val_list:
                 part_val = part_line.split()[0] if part_line else ""
@@ -255,24 +249,18 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
                     for r in current_refs_from_last_row:
                         flat_list.append({"ref": r, "part": part_val, "mfg": mfg_val})
         
-        # 3. Ref があり、Part がない (不揃い警告が出た行)
         elif current_refs_from_last_row and (not part_val_list and not is_part_continuation):
-            mfg_val = mfg_val_raw # RefしかないがMfgはあるかもしれない
+            mfg_val = mfg_val_raw
             for r in current_refs_from_last_row:
-                flat_list.append({"ref": r, "part": "", "mfg": mfg_val}) # Part を "" として追加
+                flat_list.append({"ref": r, "part": "", "mfg": mfg_val})
 
-        # 4. Ref がなく、Part がある (不揃い警告が出た行)
         elif (not current_refs_from_last_row and not is_ref_continuation) and part_val_list:
             for part_line in part_val_list:
                 part_val = part_line.split()[0] if part_line else ""
                 mfg_val = mfg_val_raw if mfg_val_raw else detect_manufacturer(part_val)
                 if part_val:
-                    # Ref を "" として追加
                     flat_list.append({"ref": "", "part": part_val, "mfg": mfg_val})
         
-        # 5. Ref も Part も継続記号の場合は、何もしない (データは last_valid に保存されている)
-        # (elif is_ref_continuation and is_part_continuation: continue)
-        # ▲▲▲ ロジック修正 (ここまで) ▲▲▲
     
     # Ref除外警告
     cancellation_warnings = [f"除外: 取り消し線のため {ref} を集計から除外しました。" for ref in sorted(list(cancellation_warnings_set))]
@@ -323,7 +311,12 @@ def group_and_finalize_bom(flat_list):
 
     for group in grouped_map.values():
         sorted_refs = sorted(list(group['refs']), key=sort_key_func)
-        final_results.append({'ref': ', '.join(sorted_refs), 'part': group['part'], 'mfg': group['mfg']})
+        
+        # ▼▼▼ 変更 (ここがバグ修正) ▼▼▼
+        # sorted_refs から "" (空文字列) を除外してから join する
+        filtered_refs = [ref for ref in sorted_refs if ref]
+        # ▲▲▲ 変更ここまで ▲▲▲
+
+        final_results.append({'ref': ', '.join(filtered_refs), 'part': group['part'], 'mfg': group['mfg']})
 
     return final_results, warnings
-
