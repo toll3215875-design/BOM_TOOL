@@ -123,7 +123,8 @@ def extract_flat_list_from_rows(data_2d, cancellation_refs=set(), remove_parenth
             ref_val_spaced_v2 = re.sub(r'([）)])\s*([（(])', r'\1 \2', ref_val)
             ref_val_spaced_v2 = re.sub(r'([）)])\s*([A-Z]+[0-9]+)', r'\1 \2', ref_val_spaced_v2, flags=re.IGNORECASE)
             ref_val_spaced_v2 = re.sub(r'([A-Z]+[0-9]+)\s*([（(])', r'\1 \2', ref_val_spaced_v2, flags=re.IGNORECASE)
-
+            
+#区切り文字の追加--------[,、\s\.\・/\，]の中に　\追加したい文字　で可能
             all_split_parts = [r for r in re.split(r'[,、\s\.\・/\，]+', ref_val_spaced_v2) if r]
             
             expanded_refs = []
@@ -320,4 +321,5 @@ def group_and_finalize_bom(flat_list):
         final_results.append({'ref': ', '.join(filtered_refs), 'part': group['part'], 'mfg': group['mfg']})
 
     return final_results, warnings
+
 
