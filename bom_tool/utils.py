@@ -25,4 +25,5 @@ def detect_manufacturer(part_number_string):
     if 'rohm' in pn_lower: return 'Rohm'
     if 'yageo' in pn_lower: return 'Yageo'
     if 'kyocera' in pn_lower: return 'Kyocera'
+
     return ""
